@@ -1,0 +1,316 @@
+---
+title: "Veri Analizi Ödev"
+author: "Barışcan Bozkurt - 20181101031"
+date: "01 05 2021"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(readr)
+library(mice)
+library(VIM)
+library(ISLR)
+library(DMwR2)
+library(rattle)
+
+blockbusters <- read_csv("Blockbusters_2019-1977.csv")
+blockbusters<-blockbusters[,-1]
+```
+
+Veri setinin ilk 6 gözlemi listelenmiştir.
+```{r }
+head(blockbusters)
+```
+Verimizin özet bilgisine bakalım.
+```{r }
+summary(blockbusters)
+```
+Satırda kayıp gözlemler:
+```{r }
+rowSums(is.na(blockbusters))
+```
+Sütunda kayıp gözlemler:
+```{r }
+colSums(is.na(blockbusters))
+```
+Genre 3'de 100'den fazla NA var, bu yüzden datamızdan çıkartacağım.
+```{r }
+blockbusters_yeni<-blockbusters[,-13]
+```
+
+Elimizdeki veriden NA oluşturmak için önce yedekledim.
+```{r }
+blockbusters_miss<-blockbusters_yeni
+
+```
+Length_in_min yani film uzunluklarından rastgele NA veri oluşturmak için:
+
+```{r }
+aa<-sample(1:nrow(blockbusters_miss),floor(nrow(blockbusters_miss)*0.03))
+blockbusters_miss$length_in_min[aa]<-NA
+```
+Kaç tane kayıp verimiz oluştuğuna bakmak için:
+```{r }
+colSums(is.na(blockbusters_miss))
+```
+
+Analizde fazla değişken olduğu için sadece NA olan sütun ile olmayan bir sütunu görüntüledim:
+```{r }
+md.pattern(blockbusters_miss[,c("film_budget","length_in_min")])
+```
+NA verilere bir başka paket ile bakalım:
+
+```{r }
+aggr(blockbusters_miss,numbers=TRUE, sortVars=TRUE, labels=names(blockbusters_yeni),cex.axis=.7,gap=3,ylab=c("Missing Ratio","Missing Pattern"))
+```
+
+Basit doldurma yöntemi olan ortalama ile doldurma yapılabilir. Önce histogram grafiğine bakalım:
+
+```{r }
+blockbusters_ort<-blockbusters_miss
+hist(blockbusters_ort$length_in_min)
+```
+
+Bu kod ile de verimizi ortalaması olan 120 ile doldurduğunu göreceğiz:
+```{r }
+blockbusters_ort$length_in_min[is.na(blockbusters_ort$length_in_min)]<-mean(blockbusters_ort$length_in_min,na.rm=TRUE)
+blockbusters_ort$length_in_min<-as.integer(blockbusters_ort$length_in_min)
+```
+
+Bir başka doldurma yöntemi olan karar ağacı dolduralım:
+
+```{r }
+
+library(rpart)
+data_dt<-blockbusters_miss
+rtree <- rpart(length_in_min ~ imdb_rating + film_budget+ worldwide_gross, data_dt, method="anova")
+library(rattle)
+fancyRpartPlot(rtree,cex=0.5)
+ 
+```
+Boş yerleri elde ettiğimiz verilerle doldurmak için:
+
+```{r }
+data_dt$length_in_min <- ifelse(is.na(data_dt$length_in_min), predict(rtree,data_dt,type="vector"),data_dt$length_in_min)
+data_dt$length_in_min<-as.integer(data_dt$length_in_min)
+```
+Hem sayıları NA verilere atamış oldum hem de integer haline çevirdim. Ancak bu NA verileri rastgele kendim oluşturmuştum. Bu yüzden ödevin devamında verinin orjinaline kullanmaya devam edeceğim.
+
+
+Verimi %80 eğitim, %20'si test olacak şekilde böldüm. 
+
+```{r }
+set.seed(1234567)
+trainIndex <- sample(1:nrow(blockbusters_yeni), size = round(0.8*nrow(blockbusters_yeni)), replace=FALSE)
+train<- blockbusters_yeni[trainIndex ,]
+test <- blockbusters_yeni[-trainIndex ,]
+```
+
+```{r }
+library("openxlsx")
+write.xlsx(train, 'train.xlsx')
+write.xlsx(test, 'test.xlsx')
+```
+
+Yıl sayısı çok fazla olduğu için yılları kategorik hale getirmeye karar verdim.
+
+```{r}
+train$yil_kategorik[train$release_year >= 1900 & train$release_year <=  1989]  <- "1_1990_oncesi"
+train$yil_kategorik[train$release_year >= 1990 & train$release_year <=  2004]  <- "2_1990_2005_arasi"
+train$yil_kategorik[train$release_year >= 2005] <- "3_2005_sonrasi"
+
+```
+
+Kategorik veriyi oluşturduk fakat R'da henüz factor olarak algılanmıyor. Kategorik verilerimizin factor olarak algılanması için:
+
+
+```{r}
+train<-as.data.frame(train)
+train$mpaa_rating<-as.factor(train$mpaa_rating)
+train$yil_kategorik<-as.factor(train$yil_kategorik)
+summary(train)
+
+
+```
+
+Göründüğü üzere hem MPAA rating (Amerikan Sinema Filmleri Derneği Yaş Derecelendirmesi) hem de Yıl değişkenimiz artık kategorik olarak var.
+
+
+```{r}
+library(funModeling)
+profiling_num(train)
+plot_num(train)
+
+
+```
+
+```{r}
+library(psych)
+library(dplyr)
+df<-select(train,film_budget,yil_kategorik)
+describeBy(df, df$yil_kategorik)
+
+```
+
+Aslında burada bariz bir şekilde beklediğimiz sonucu alıyoruz. Sonuçlara baktığımızda 1990 öncesindeki film bütçelerinin ortalama 17 milyon olduğu, 1990 ile 2005 arasındaki film bütçelerinin ortalama 74 milyon olduğu, 2005'den sonra da bu ortalama bütçenin 164 milyon gibi bir rakama uçtuğunu görüyoruz. Bunun en büyük sebebi sinemaya olan ilginin artmasıyla daha yüksek risklere girilmesi olarak açıklanabilir.
+
+```{r}
+library(ggplot2)
+ggplot(train, aes(x=yil_kategorik,y=film_budget, fill=yil_kategorik))+
+  geom_boxplot()+
+  stat_summary(fun = mean, geom="line", group= 1, color= "black", size = 1)    
+
+
+```
+
+```{r}
+train$begeni<-ifelse(train$imdb_rating>7,"Begenildi","Begenilmedi")
+dt<-table(train$begeni,train$yil_kategorik)
+prop.table(dt,2)
+
+```
+Burada beğeni olarak kabul edilen IMDB puanı 7 olarak aldım. 7'nin üstündeki filmler beğenildi, altındakiker ise beğenilmedi olarak sınıflandı. Genelde de 7 puan izleyici açısından kritik bir değerdir. Bu kategorik sınıflandırmada beğeninin arttığını görüyoruz. Grafiksel olarak bakmak istersek:
+
+```{r}
+library("gplots")
+balloonplot(t(dt), main ="Yıllar ve Begeni Orani ", xlab ="", ylab="",
+            label = FALSE,show.margins = FALSE)
+```
+
+
+```{r}
+dt_c<-table(train$begeni,train$yil_kategorik)
+dtc_exp <- chisq.test(dt_c)$expected
+rowcs <- function(i, obs, exp) {
+  sum(((obs[i,] - exp[i,])^2)/exp[i,])
+}
+chi_dtc<-as.matrix(lapply(seq_len(nrow(dt_c)), rowcs, obs = dt_c, exp = dtc_exp))
+rownames(chi_dtc)<-rownames(dt_c)
+chi_dtc
+```
+Farklı bir grafik ile:
+
+```{r}
+ggplot(train,aes(yil_kategorik, fill=begeni))+
+  geom_bar(position=position_dodge())+
+  ggtitle("Filmlerin 3 farklı Yıl Kategorisinde Beğenilip Beğenilmeme Grafiği")+
+  xlab("Yıllar")+
+  ylab("Beğeni Durumu")+
+  scale_fill_discrete(name = "Begeni Durumu",
+                      labels = c("Begenildi", "Begenilmedi"))+
+  scale_x_discrete(labels = c("1_1990_oncesi" ="1990 Öncesi","2_1990_2005_arasi"="1990 ile 2005 Arası","3_2005_sonrasi"="2005 Sonrası"))
+```
+1990 öncesine baktığımda beğenilmeyen filmlerin beğenilenlerden farkla önde olduğunu görmekteyiz. Bu fark 1990-2005 yılları arasında çıkan filmlerde azalmış. 2005 sonrasında çıkan blockbuster filmlerde ise beğenilenler beğenilmeyenlerden fazla.
+
+
+```{r}
+k<-ceiling((log(2*nrow(train)))+1) 
+genislik<-max(train$imdb_rating)-min(train$imdb_rating)
+binw<-genislik/k
+
+ggplot(train,aes(imdb_rating))+
+  geom_histogram(binwidth=binw)
+```
+
+IMDB puanlarının histogramında bir sola çarpıklık var.
+
+
+```{r}
+ggplot(train,aes(imdb_rating))+
+  geom_histogram(aes(y=..density..))+
+  geom_density(alpha=.5,fill="red")
+```
+
+```{r}
+ggplot(train, aes(sample=imdb_rating))+stat_qq()
+```
+
+
+```{r}
+ggplot(train, aes(imdb_rating, worldwide_gross, color=length_in_min, size=length_in_min))+
+  geom_point(alpha=0.5)+
+  scale_color_gradientn(colors =rainbow(unique(train$length_in_min))) +
+  theme(legend.position = "right")
+```
+
+En çok yoğunluğun 7 puan seviyesinde olduğunu ve yine film uzunluklarının da ortalama olarak 120-140 dakika olarak olduğunu görüyoruz.
+
+```{r}
+ggplot(train,aes(x=length_in_min,y=worldwide_gross))+
+  geom_point(size=1)+
+  geom_text(label=rownames(train),nudge_x=0.25,nudge_y=0.25, check_overlap=T)+
+  geom_smooth(method=lm,col="red",se=FALSE)
+```
+
+```{r}
+ggplot(train, aes(x=length_in_min, y=worldwide_gross) ) +
+  stat_density_2d(aes(fill = ..level..), geom = "polygon")
+```
+
+```{r}
+cor_train<-train[,c(9,10,3)]
+library(GGally)
+cor(cor_train)
+```
+
+```{r}
+library(PerformanceAnalytics)
+chart.Correlation(cor_train, histogram=TRUE, pch=19)
+```
+Domestic ile Worldwide arasında güçlü bağlantı gözükmüş olsa bile dağılımlar normal olmadığı için dönüşüm uygulamadan henüz yorumlamayacağım.
+
+```{r}
+library(funModeling)
+plot_num(train)
+```
+Dönüşüme ihtiyacı olduklarını görüyorum.
+Sağa çarpık olanlar için logaritmik dönüşümü deneyeceğim.
+
+
+```{r}
+train$worldwidegross_log<-log10(train$worldwide_gross)
+hist(train$worldwidegross_log, col = "purple",main="Histogram of Log(Dünyadaki Gişe)")
+```
+
+
+```{r}
+train$domestic_log<-log10(train$domestic_gross)
+hist(train$domestic_log, col = "pink",main="Histogram of Log(USA Gişe)")
+```
+```{r}
+train$budget_log<-log10(train$film_budget)
+hist(train$budget_log, col = "yellow",main="Histogram of Log(Film Bütçesi)")
+```
+Puanlarda sola çarpıklık olduğu için kök dönüşümü deneyeceğim.
+
+```{r}
+train$rating_kok<-sqrt(train$imdb_rating) 
+hist(train$rating_kok, col = "green",main="Histogram of SQRT(IMDB Puanları)")
+```
+
+```{r}
+yeni_cor_train<-train[,c(15,16,18)]
+library(GGally)
+library(PerformanceAnalytics)
+chart.Correlation(yeni_cor_train, histogram=TRUE, pch=19)
+```
+Dönüşümlü veriler üzerinden korelasyonlara tekrar baktığımızda dünya çapında gişe ile USA gişesinin ciddi şekilde ilişkili olduğunu görüyoruz. Ancak puanın etkilemesi konusunda aynı şeyi söyleyemeyiz.
+
+```{r}
+yeni2_cor_train<-train[,c(15,16,17)]
+library(GGally)
+library(PerformanceAnalytics)
+chart.Correlation(yeni2_cor_train, histogram=TRUE, pch=19)
+```
+Bütçe ile gişe arasında ilişki var gibi görünüyor. Ancak bütçede dönüşüme rağmen simetrik bir dağılım yakalayamadığımız için kesin bir şey söylemek güç.
+
+```{r}
+library(caret)
+featurePlot(x=train[,c("length_in_min","film_budget")],y=train$worldwide_gross)
+
+```
+Bütçenin filmin uzunluğuna kıyasla gişeyi daha fazla etkiediğini görüyoruz.
+
+## Analizlerin Sonucunda:
+Yaptığım analizler sonucu en çok tercih edilen filmlerin genellikle 120 dakika uzunluğuna yakın seviyelerde olduğunu görüyorum. Aslında doğal olarak da bu mantıklı çünkü bunun uzaması durumunda filmin güç içerisinde gösterime girme sayısı azalmakta. Sürenin azalması durumunda da muhtemelen izleyici parasının karşılığını alamayacağını düşündüğü için uzak durmakta. 2 saati bu noktada yapımcılar tarafından amaçlanan süre olarak düşünebiliriz. Onun dışında yine beklediğim şekilde bütçenin de gişeyi etkilediğini görüyorum. Bu da mantıklı çünkü fazla bütçe demek fazla risk demek. Ayrıca verimizde olmasa da büyük bütçeli filmlerde daha büyük reklam kampanyaları yapılmakta. Bu da gişe konusunda geri dönüşünü etkilemektedir. Blockbuster filmler genelde ilk başta Çin'de ya USA'de gösterime girer. Ve buralarda elde ettikleri başarı dünyadaki diğer gişe sayısına da yansır. Yine analizlerim sonucunda bunun doğru olduğunu gördüm. IMDB puanının izleyici açısından çok önemli olmadığını öğrendim. Çok düşük puanlarda elbette gişe sayısında bir düşüklük var ama 6-7 puan seviyesi izleyici için yeterli görünmekte.
